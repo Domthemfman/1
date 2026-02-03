@@ -1,0 +1,283 @@
+e client'
+
+import { useState, useEffect } from 'react'
+import { ethers } from 'ethers'
+import CrystalVisualization from '@/components/CrystalVisualization'
+import ForumPost from '@/components/ForumPost'
+import CreatePostModal from '@/components/CreatePostModal'
+import PanicButton from '@/components/PanicButton'
+
+// Polygon Mumbai Testnet contract address
+const CONTRACT_ADDRESS = '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+
+const CONTRACT_ABI = [
+  "function createPost(string memory encryptedContent, string memory contentHash) public payable returns (uint256)",
+  "function validatePost(uint256 postId) public",
+  "function disputePost(uint256 postId, string memory reason) public",
+  "function getPost(uint256 postId) public view returns (tuple(address author, string encryptedContent, string contentHash, uint256 timestamp, uint256 validations, uint256 disputes, bool exists))",
+  "function getPostCount() public view returns (uint256)"
+]
+
+interface Post {
+  id: number
+  author: string
+  encryptedContent: string
+  contentHash: string
+  timestamp: number
+  validations: number
+  disputes: number
+  decryptedContent?: string
+}
+
+export default function Home() {
+  const [account, setAccount] = useState<string>('')
+  const [posts, setPosts] = useState<Post[]>([])
+  const [loading, setLoading] = useState(false)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [contract, setContract] = useState<ethers.Contract | null>(null)
+  const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null)
+
+  useEffect(() => {
+    checkIfWalletIsConnected()
+  }, [])
+
+  useEffect(() => {
+    if (contract) {
+      loadPosts()
+    }
+  }, [contract])
+
+  const checkIfWalletIsConnected = async () => {
+    try {
+      const { ethereum } = window as any
+      if (!ethereum) {
+        console.log('Make sure you have MetaMask installed!')
+        return
+      }
+
+      const accounts = await ethereum.request({ method: 'eth_accounts' })
+      if (accounts.length !== 0) {
+        const account = accounts[0]
+        setAccount(account)
+        setupContract(ethereum)
+      }
+    } catch (error) {
+      console.error('Error checking wallet connection:', error)
+    }
+  }
+
+  const connectWallet = async () => {
+    try {
+      const { ethereum } = window as any
+      if (!ethereum) {
+        alert('Please install MetaMask!')
+        return
+      }
+
+      const accounts = await ethereum.request({ method: 'eth_requestAccounts' })
+      setAccount(accounts[0])
+      setupContract(ethereum)
+    } catch (error) {
+      console.error('Error connecting wallet:', error)
+    }
+  }
+
+  const setupContract = async (ethereum: any) => {
+    const provider = new ethers.BrowserProvider(ethereum)
+    const signer = await provider.getSigner()
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer)
+    setProvider(provider)
+    setContract(contract)
+  }
+
+  const loadPosts = async () => {
+    if (!contract) return
+    
+    setLoading(true)
+    try {
+      const postCount = await contract.getPostCount()
+      const loadedPosts: Post[] = []
+
+      for (let i = 1; i <= Number(postCount); i++) {
+        const post = await contract.getPost(i)
+        if (post.exists) {
+          loadedPosts.push({
+            id: i,
+            author: post.author,
+            encryptedContent: post.encryptedContent,
+            contentHash: post.contentHash,
+            timestamp: Number(post.timestamp),
+            validations: Number(post.validations),
+            disputes: Number(post.disputes)
+          })
+        }
+      }
+
+      setPosts(loadedPosts.reverse()) // Show newest first
+    } catch (error) {
+      console.error('Error loading posts:', error)
+    }
+    setLoading(false)
+  }
+
+  const handleCreatePost = async (content: string, isAnonymous: boolean) => {
+    if (!contract) return
+
+    setLoading(true)
+    try {
+      // Simple encryption (in production, use proper encryption)
+      const encryptedContent = btoa(content)
+      const contentHash = ethers.keccak256(ethers.toUtf8Bytes(content))
+
+      // Send transaction with optional payment
+      const tx = await contract.createPost(encryptedContent, contentHash, {
+        value: ethers.parseEther('0.001') // 0.001 MATIC for paid post
+      })
+
+      await tx.wait()
+      await loadPosts()
+      setShowCreateModal(false)
+    } catch (error) {
+      console.error('Error creating post:', error)
+      alert('Error creating post. See console for details.')
+    }
+    setLoading(false)
+  }
+
+  const handleValidate = async (postId: number) => {
+    if (!contract) return
+
+    try {
+      const tx = await contract.validatePost(postId)
+      await tx.wait()
+      await loadPosts()
+    } catch (error) {
+      console.error('Error validating post:', error)
+    }
+  }
+
+  const handleDispute = async (postId: number, reason: string) => {
+    if (!contract) return
+
+    try {
+      const tx = await contract.disputePost(postId, reason)
+      await tx.wait()
+      await loadPosts()
+    } catch (error) {
+      console.error('Error disputing post:', error)
+    }
+  }
+
+  const decryptPost = (encryptedContent: string): string => {
+    try {
+      return atob(encryptedContent)
+    } catch {
+      return 'Error decrypting content'
+    }
+  }
+
+  return (
+    <main className="min-h-screen p-4 md:p-8">
+      <PanicButton />
+      
+      {/* Header */}
+      <div className="max-w-7xl mx-auto mb-8">
+        <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+          <div>
+            <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+              Crystalline ⭐
+            </h1>
+            <p className="text-slate-400 mt-2">Truth Seekers Network - Blockchain Edition</p>
+          </div>
+          
+          {!account ? (
+            <button
+              onClick={connectWallet}
+              className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 rounded-lg font-semibold hover:from-blue-600 hover:to-purple-600 transition-all shadow-lg"
+            >
+              Connect Wallet
+            </button>
+          ) : (
+            <div className="flex items-center gap-4">
+              <span className="text-sm text-slate-400">
+                {account.slice(0, 6)}...{account.slice(-4)}
+              </span>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 rounded-lg font-semibold hover:from-green-600 hover:to-emerald-600 transition-all shadow-lg"
+              >
+                + New Post
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 3D Crystal Visualization */}
+      <div className="max-w-7xl mx-auto mb-8">
+        <CrystalVisualization posts={posts} />
+      </div>
+
+      {/* Forum Posts */}
+      <div className="max-w-4xl mx-auto">
+        <h2 className="text-2xl font-bold mb-6">Community Forum</h2>
+        
+        {loading && posts.length === 0 ? (
+          <div className="text-center py-12">
+            <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-400 border-r-transparent"></div>
+            <p className="mt-4 text-slate-400">Loading posts...</p>
+          </div>
+        ) : posts.length === 0 ? (
+          <div className="text-center py-12 bg-slate-800/50 rounded-lg">
+            <p className="text-slate-400">No posts yet. Be the first to share!</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {posts.map((post) => (
+              <ForumPost
+                key={post.id}
+                post={{
+                  ...post,
+                  decryptedContent: decryptPost(post.encryptedContent)
+                }}
+                onValidate={() => handleValidate(post.id)}
+                onDispute={(reason) => handleDispute(post.id, reason)}
+                currentUser={account}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Create Post Modal */}
+      {showCreateModal && (
+        <CreatePostModal
+          onClose={() => setShowCreateModal(false)}
+          onSubmit={handleCreatePost}
+          loading={loading}
+        />
+      )}
+
+      {/* Footer Info */}
+      <div className="max-w-7xl mx-auto mt-12 p-6 bg-slate-800/30 rounded-lg border border-slate-700">
+        <h3 className="text-lg font-semibold mb-3">About Crystalline</h3>
+        <p className="text-slate-400 mb-4">
+          A decentralized, uncensorable platform for survivors and truth seekers. Your posts are stored on the Polygon blockchain, ensuring they can never be removed or censored.
+        </p>
+        <div className="grid md:grid-cols-3 gap-4 text-sm">
+          <div>
+            <h4 className="font-semibold text-blue-400 mb-1">Encrypted Posts</h4>
+            <p className="text-slate-500">Your content is encrypted before posting</p>
+          </div>
+          <div>
+            <h4 className="font-semibold text-purple-400 mb-1">Community Validation</h4>
+            <p className="text-slate-500">Posts grow stronger with community support</p>
+          </div>
+          <div>
+            <h4 className="font-semibold text-green-400 mb-1">Pattern Matching</h4>
+            <p className="text-slate-500">Find others with similar experiences</p>
+          </div>
+        </div>
+      </div>
+    </main>
+  
